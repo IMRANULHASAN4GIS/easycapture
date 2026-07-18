@@ -108,7 +108,7 @@ const Exporter = (() => {
   }
   function mediaFileName(row, m, i) {
     const kind = String(m.kind || m.type || 'MEDIA').toUpperCase().replace(/[^A-Z0-9]+/g, '_');
-    return `${row.group.name}_FID_${String(row.fid).padStart(6, '0')}_${kind}_${String(i + 1).padStart(2, '0')}.${safeFilePart(mediaExt(m))}`;
+    return `${row.group.name}_OID_${String(row.objectId).padStart(6, '0')}_${kind}_${String(i + 1).padStart(2, '0')}.${safeFilePart(mediaExt(m))}`;
   }
   function mediaPaths(row, base, separator) {
     base = base == null ? 'media' : String(base).replace(/[\\/]+$/, '');
@@ -128,15 +128,15 @@ const Exporter = (() => {
     const rec = row.rec, mp = mediaPaths(row, options.mediaBase || 'media', options.separator || '/');
     const zValue = rec.location && rec.location.z != null ? rec.location.z : (rec.data || {}).Z_Elevation ?? (rec.data || {}).Z_ELEVATION ?? (rec.data || {}).z_elevation;
     const out = {
-      OBJECTID: row.objectId, FID: row.fid,
-      FEATURE_CLASS: row.group.name, ASSET_TYPE: row.group.assetType,
+      OBJECTID: row.objectId,
+      ASSET_TYPE: row.group.assetType,
       STATUS: rec.status || '', SURVEYOR: rec.surveyor || '', ROLE: rec.role || '',
       Z_ELEVATION: zValue == null || zValue === '' ? '' : Number(zValue),
       CREATED_AT: rec.createdAt || '', UPDATED_AT: rec.updatedAt || '',
       GPS_ACCURACY_M: rec.location && rec.location.accuracy != null ? Math.round(Number(rec.location.accuracy) * 100) / 100 : '',
       PHOTO_COUNT: (rec.media || []).filter((m) => m.type === 'photo').length,
       VIDEO_COUNT: (rec.media || []).filter((m) => m.type === 'video').length,
-      PHOTO_URL: mp.photo[0] || '', VIDEO_URL: mp.video[0] || '', MEDIA_ALL: mp.all.join(';'),
+      PHOTO_URL: mp.photo[0] || '', VIDEO_URL: mp.video[0] || '',
     };
     Object.entries(rec.data || {}).forEach(([k, v]) => { if (!(String(k).toUpperCase() in out)) out[k] = v; });
     return out;
@@ -153,7 +153,7 @@ const Exporter = (() => {
 
   /* ---------- CSV (attribute table) ---------- */
   function toCSV(records) {
-    const context = buildExportRows(records), cols = new Set(['OBJECTID', 'FID', 'FEATURE_CLASS', 'ASSET_TYPE', 'STATUS', 'SURVEYOR', 'ROLE', 'CREATED_AT', 'UPDATED_AT', 'GEOMETRY_TYPE', 'LONGITUDE', 'LATITUDE', 'GPS_ACCURACY_M', 'PHOTO_COUNT', 'VIDEO_COUNT', 'PHOTO_URL', 'VIDEO_URL', 'MEDIA_ALL']);
+    const context = buildExportRows(records), cols = new Set(['OBJECTID', 'ASSET_TYPE', 'STATUS', 'SURVEYOR', 'ROLE', 'CREATED_AT', 'UPDATED_AT', 'GEOMETRY_TYPE', 'LONGITUDE', 'LATITUDE', 'Z_ELEVATION', 'GPS_ACCURACY_M', 'PHOTO_COUNT', 'VIDEO_COUNT', 'PHOTO_URL', 'VIDEO_URL']);
     context.rows.forEach((row) => Object.keys(row.rec.data || {}).forEach((k) => cols.add(k)));
     const arr = [...cols];
     const q = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
@@ -192,7 +192,7 @@ const Exporter = (() => {
       } else if (g.type === 'Polygon') {
         geomKml = `<Polygon><outerBoundaryIs><LinearRing><coordinates>${g.coordinates[0].map((c) => `${c[0]},${c[1]},${alt(c)}`).join(' ')}</coordinates></LinearRing></outerBoundaryIs></Polygon>`;
       }
-      const name = (r.data && (r.data.asset_id || r.data.line_id || r.data.name || r.data.work_order)) || `${row.group.name} FID ${row.fid}`;
+      const name = (r.data && (r.data.asset_id || r.data.line_id || r.data.name || r.data.work_order)) || `${row.group.name} ${row.objectId}`;
       return `<Placemark><name>${esc(name)}</name><description><![CDATA[${desc}]]></description>${geomKml}</Placemark>`;
     }).join('\n');
     return `<?xml version="1.0" encoding="UTF-8"?>
@@ -204,7 +204,7 @@ ${placemarks}
   /* ---------- ArcMap-safe Shapefile writer ---------------------------------------
      Writes the binary geometry and dBASE table directly. This avoids the malformed
      polyline records produced by the former browser library and keeps row order,
-     FID-derived media names and attachment relationships deterministic.             */
+     OBJECTID-derived media names and attachment relationships deterministic.             */
   function concatBytes(chunks) {
     const size = chunks.reduce((n, c) => n + c.byteLength, 0), out = new Uint8Array(size);
     let offset = 0; chunks.forEach((c) => { out.set(c, offset); offset += c.byteLength; });
@@ -280,7 +280,6 @@ ${placemarks}
     { source: 'VIDEO_COUNT', name: 'VIDEO_CNT', type: 'N', length: 6, decimals: 0 },
     { source: 'PHOTO_URL', name: 'PHOTO_URL', type: 'C', length: 254 },
     { source: 'VIDEO_URL', name: 'VIDEO_URL', type: 'C', length: 254 },
-    { source: 'MEDIA_ALL', name: 'MEDIA_ALL', type: 'C', length: 254 },
   ];
   function dbfName(value, used) {
     const root = String(value || 'FIELD').toUpperCase().replace(/[^A-Z0-9_]+/g, '_').replace(/^_+/, '').slice(0, 10) || 'FIELD';
@@ -345,7 +344,7 @@ ${placemarks}
     const out = []; let attachmentId = 1;
     context.rows.forEach((row) => (row.rec.media || []).forEach((m, i) => {
       out.push({
-        ATTACHMENTID: attachmentId++, REL_OBJECTID: row.objectId, REL_FID: row.fid,
+        ATTACHMENTID: attachmentId++, REL_OBJECTID: row.objectId,
         FEATURE_CLASS: row.group.name, ASSET_TYPE: row.group.assetType,
         ATT_NAME: mediaFileName(row, m, i), CONTENT_TYPE: m.mime || (m.type === 'photo' ? 'image/jpeg' : m.type === 'video' ? 'video/webm' : 'application/octet-stream'),
         DATA_SIZE: m.size || '', MEDIA_URL: mediaPaths(row).all[i], CAPTURED_AT: m.capturedAt || '',
@@ -373,7 +372,7 @@ ${placemarks}
         }
         if (saved) {
           manifest.push({
-            ATTACHMENTID: manifest.length + 1, REL_OBJECTID: row.objectId, REL_FID: row.fid,
+            ATTACHMENTID: manifest.length + 1, REL_OBJECTID: row.objectId,
             FEATURE_CLASS: row.group.name, ASSET_TYPE: row.group.assetType,
             ATT_NAME: mediaFileName(row, m, i), CONTENT_TYPE: m.mime || '', DATA_SIZE: m.size || '',
             MEDIA_URL: `${root}/${row.group.name}/${mediaFileName(row, m, i)}`, CAPTURED_AT: m.capturedAt || '',
@@ -398,7 +397,7 @@ ${placemarks}
       zip.file(base + '.shp', set.shp); zip.file(base + '.shx', set.shx); zip.file(base + '.dbf', dbf.bytes);
       zip.file(base + '.prj', WGS84_WKT); zip.file(base + '.cpg', 'UTF-8'); zip.file(base + '.qml', qgisStyleXml());
       zip.file(base + '_FIELDS.csv', objectsToCSV(dbf.fields.map((f) => ({ FIELD_NAME: f.name, SOURCE_FIELD: f.source, TYPE: f.type, LENGTH: f.length, DECIMALS: f.decimals || 0 }))));
-      classes.push({ FEATURE_CLASS: base, ASSET_TYPE: group.assetType, GEOMETRY_TYPE: group.family, FEATURE_COUNT: group.rows.length, FIRST_FID: 0, LAST_FID: group.rows.length - 1 });
+      classes.push({ FEATURE_CLASS: base, ASSET_TYPE: group.assetType, GEOMETRY_TYPE: group.family, FEATURE_COUNT: group.rows.length, FIRST_OID: 1, LAST_OID: group.rows.length });
     }
     const manifest = await addMediaFiles(zip, context, 'media');
     zip.file('FEATURE_CLASSES.csv', objectsToCSV(classes));
@@ -406,7 +405,7 @@ ${placemarks}
     if (context.skipped.length) zip.file('SKIPPED_FEATURES.csv', objectsToCSV(context.skipped));
     zip.file('SET_ARCMAP_HYPERLINK_BASE.py', arcMapSetupScript());
     zip.file('README_ARCMAP.txt',
-`ARCMAP-READY SHAPEFILE EXPORT — ${projectName}\n\nFEATURE CLASSES\nEach Asset Type is exported as its own feature class. Points, polylines and polygons are never mixed.\nArcMap creates the zero-based FID automatically from DBF row order. OBJECTID is also included as a stable one-based business row number.\nThe old application record_id is intentionally not used as a GIS identifier.\n\nMEDIA / ATTACHMENTS\nMedia names use the owning feature row, for example:\n  Water_Line_FID_000000_SITE_PHOTO_01.jpg\nATTACHMENTS.csv relates every file through REL_FID and REL_OBJECTID. Keep the media folder beside the shapefiles.\n\nENABLE CLICKABLE PHOTOS IN ARCMAP\n1. Extract this entire ZIP; do not open the shapefile inside the ZIP.\n2. Add the .shp to ArcMap.\n3. Open Layer Properties > Display (not HTML Popup).\n4. Check Support Hyperlinks using field; select PHOTO_URL; choose Document; click OK.\n5. Run SET_ARCMAP_HYPERLINK_BASE.py from ArcMap's Python window, or set File > Map Document Properties > Hyperlink Base to this extracted folder.\n6. Use the Hyperlink lightning-bolt tool and click a feature.\n\nThe HTML Popup tab shown in ArcMap is a different feature and does not enable field hyperlinks.\n\nVALIDATION\nGeometry records use the ESRI Shapefile binary specification, WGS 1984 (EPSG:4326), matched SHP/SHX offsets, closed polygon rings and ArcMap-safe DBF field widths.`);
+`ARCMAP-READY SHAPEFILE EXPORT — ${projectName}\n\nFEATURE CLASSES\nEach Asset Type is exported as its own feature class. Points, polylines and polygons are never mixed.\nArcMap creates its own internal FID automatically from DBF row order. OBJECTID is the stable one-based feature identifier used throughout this export.\nThe old application record_id is intentionally not used as a GIS identifier.\n\nMEDIA / ATTACHMENTS\nMedia names use the owning feature row, for example:\n  Water_Line_OID_000001_SITE_PHOTO_01.jpg\nATTACHMENTS.csv relates every file through REL_OBJECTID. Keep the media folder beside the shapefiles.\n\nENABLE CLICKABLE PHOTOS IN ARCMAP\n1. Extract this entire ZIP; do not open the shapefile inside the ZIP.\n2. Add the .shp to ArcMap.\n3. Open Layer Properties > Display (not HTML Popup).\n4. Check Support Hyperlinks using field; select PHOTO_URL; choose Document; click OK.\n5. Run SET_ARCMAP_HYPERLINK_BASE.py from ArcMap's Python window, or set File > Map Document Properties > Hyperlink Base to this extracted folder.\n6. Use the Hyperlink lightning-bolt tool and click a feature.\n\nThe HTML Popup tab shown in ArcMap is a different feature and does not enable field hyperlinks.\n\nVALIDATION\nGeometry records use the ESRI Shapefile binary specification, WGS 1984 (EPSG:4326), matched SHP/SHX offsets, closed polygon rings and ArcMap-safe DBF field widths.`);
     return zip.generateAsync({ type: 'blob', compression: 'DEFLATE' });
   }
 
@@ -459,7 +458,7 @@ ${placemarks}
   function buildWorkbook(records) {
     if (typeof XLSX === 'undefined') return null;
     const context = buildExportRows(records);
-    const cols = new Set(['OBJECTID', 'FID', 'FEATURE_CLASS', 'ASSET_TYPE', 'STATUS', 'SURVEYOR', 'ROLE', 'CREATED_AT', 'UPDATED_AT', 'GEOMETRY_TYPE', 'LONGITUDE', 'LATITUDE', 'GPS_ACCURACY_M', 'PHOTO_COUNT', 'VIDEO_COUNT', 'PHOTO_URL', 'VIDEO_URL', 'MEDIA_ALL']);
+    const cols = new Set(['OBJECTID', 'ASSET_TYPE', 'STATUS', 'SURVEYOR', 'ROLE', 'CREATED_AT', 'UPDATED_AT', 'GEOMETRY_TYPE', 'LONGITUDE', 'LATITUDE', 'Z_ELEVATION', 'GPS_ACCURACY_M', 'PHOTO_COUNT', 'VIDEO_COUNT', 'PHOTO_URL', 'VIDEO_URL']);
     context.rows.forEach((row) => Object.keys(row.rec.data || {}).forEach((k) => { if (![...cols].some((c) => c === k.toUpperCase())) cols.add(k); }));
     const arr = [...cols];
     const aoa = [arr];
@@ -498,8 +497,8 @@ ${placemarks}
     arr.forEach((_, ci) => { const cell = ws[XLSX.utils.encode_cell({ c: ci, r: 0 })]; if (cell) cell.s = { font: { bold: true, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '1F4E78' } } }; });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Features');
-    const attachments = attachmentRows(context), aws = XLSX.utils.json_to_sheet(attachments.length ? attachments : [{ ATTACHMENTID: '', REL_OBJECTID: '', REL_FID: '', FEATURE_CLASS: '', ATT_NAME: '', MEDIA_URL: '' }]);
-    const attachmentHeaders = attachments.length ? Object.keys(attachments[0]) : ['ATTACHMENTID', 'REL_OBJECTID', 'REL_FID', 'FEATURE_CLASS', 'ATT_NAME', 'MEDIA_URL'];
+    const attachments = attachmentRows(context), aws = XLSX.utils.json_to_sheet(attachments.length ? attachments : [{ ATTACHMENTID: '', REL_OBJECTID: '', FEATURE_CLASS: '', ATT_NAME: '', MEDIA_URL: '' }]);
+    const attachmentHeaders = attachments.length ? Object.keys(attachments[0]) : ['ATTACHMENTID', 'REL_OBJECTID', 'FEATURE_CLASS', 'ATT_NAME', 'MEDIA_URL'];
     const urlCol = attachmentHeaders.indexOf('MEDIA_URL');
     if (urlCol >= 0 && attachments.length) attachments.forEach((item, ri) => {
       const addr = XLSX.utils.encode_cell({ c: urlCol, r: ri + 1 }), cell = aws[addr]; if (!cell || !item.MEDIA_URL) return;
@@ -531,7 +530,7 @@ ${placemarks}
 1. Extract this entire ZIP.
 2. Keep attributes.xlsx and the media folder together.
 3. Open attributes.xlsx. Use Features for GIS rows and Attachments for one media file per row.
-4. Click a blue Open media cell. REL_FID and REL_OBJECTID identify its owning feature.
+4. Click a blue Open media cell. REL_OBJECTID identifies its owning feature.
 5. In Excel Protected View, choose Enable Editing before clicking links.
 
 This bundle contains ${manifest.length} media file(s). Relative links are portable and work offline.`);
@@ -626,7 +625,7 @@ ${rows || '<p>No media in this export.</p>'}</body></html>`;
     } catch (e) { console.warn('shapefile skipped in package:', e.message); }
 
     // Media sits beside attributes.xlsx/GeoJSON. File names and relationships are
-    // derived from the owning feature class FID, exactly as in the shapefile bundle.
+    // derived from the owning feature OBJECTID, exactly as in the shapefile bundle.
     const mediaManifest = await addMediaFiles(zip, context, 'data/media');
 
     // Photo gallery — a plain HTML page at the package root: click any record, the photo
@@ -646,12 +645,12 @@ CONTENTS
   data/project.json      Complete structured backup (re-importable)
   data/attributes.xlsx   Attribute table with CLICKABLE photo/video hyperlinks
   data/field_route.geojson  Automatically saved field route with time/distance summary
-  data/media/            Geotagged photos/video named from feature-class FID
-  data/media/attachments.csv  Esri-style media relation table (REL_FID/REL_OBJECTID)
+  data/media/            Geotagged photos/video named from feature OBJECTID
+  data/media/attachments.csv  Esri-style media relation table (REL_OBJECTID)
 
 MEDIA LINKS — how to make the photo open on click
   Every record carries relative links to its media:
-    PHOTO_URL   first photo    e.g. media/Water_Line/Water_Line_FID_000000_SITE_PHOTO_01.jpg
+    PHOTO_URL   first photo    e.g. media/Water_Line/Water_Line_OID_000001_SITE_PHOTO_01.jpg
     VIDEO_URL   first video
     MEDIA_ALL   all files, separated by ';'
   FIRST: extract this whole ZIP — links cannot resolve from inside an unextracted archive.
@@ -686,8 +685,8 @@ COORDINATE SYSTEM
   WGS84 (EPSG:4326). Longitude, latitude in decimal degrees.
 
 NOTES FOR GIS
-  - Shapefile FID is zero-based and automatic; OBJECTID is a stable one-based row number.
-  - Join media with REL_FID + FEATURE_CLASS (or REL_OBJECTID + FEATURE_CLASS).
+  - OBJECTID is the stable one-based feature identifier across all formats.
+  - Join media with REL_OBJECTID + FEATURE_CLASS.
   - Asset classification is exported in ASSET_TYPE and defines the feature-class name.
   - field_route.geojson includes the complete GPS track and route statistics.
   - CSV includes longitude/latitude for point features; use GeoJSON/Shapefile for lines and polygons.

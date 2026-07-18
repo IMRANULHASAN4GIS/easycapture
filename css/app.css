@@ -596,3 +596,16 @@ input[type="checkbox"] { accent-color: var(--esri-blue); }
 /* ---------- record sheet: labeled tool buttons ---------- */
 .btn.tb { flex-direction: column; gap: 2px; padding: 8px 10px; line-height: 1; }
 .btn.tb span { font-size: 10px; font-weight: 600; }
+
+/* ---------- Streaming Capture bar ---------- */
+.stream-bar { position: absolute; left: 10px; right: 10px; bottom: calc(14px + env(safe-area-inset-bottom)); z-index: 55;
+  display: flex; flex-direction: column; gap: 9px; background: var(--white); border: 1px solid var(--line);
+  border-radius: 14px; padding: 11px 13px; box-shadow: var(--sh-3); }
+.stream-info { display: flex; align-items: center; gap: 10px; }
+.stream-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--grey-300, #C5CDD4); flex: 0 0 auto; }
+.stream-dot.rec { background: var(--red, #E14B3B); animation: streamPulse 1.2s ease-in-out infinite; }
+@keyframes streamPulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.8); } }
+.stream-t { font-weight: 750; font-size: 14px; }
+.stream-d { font-size: 12px; color: var(--ink-2, #5A6772); }
+.stream-btns { display: flex; gap: 8px; }
+.stream-btns .btn { flex: 1; padding: 9px 6px; font-size: 13px; }

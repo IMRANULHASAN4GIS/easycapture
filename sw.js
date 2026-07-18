@@ -1,7 +1,7 @@
 /* Smart Maidani service worker — v9
    Strategy: network-first for app files (updates deploy immediately, cache is offline fallback);
    cache-first for CDN libraries and map tiles. */
-const CACHE = 'smartmaidani-v15';
+const CACHE = 'smartmaidani-v16';
 const CORE = [
   './',
   './index.html',

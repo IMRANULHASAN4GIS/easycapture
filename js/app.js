@@ -696,6 +696,7 @@ const App = {
     this.state.lastFix = fix;
     this.showGPS(fix);
     this.pushTrail(fix);
+    if (this._streamActive && !this._streamPaused) this.streamOnFix(fix);
     if (!this._hadFirstFix) { this._hadFirstFix = true; this.centerOnFix(true); } // one-time convenience center on first-ever fix
     else if (this.state.follow && this.state.map) this.centerOnFix(false);
   },
@@ -859,6 +860,16 @@ Object.assign(App, {
     const body = `
       <div class="field"><label class="lbl">Project name <span class="req">*</span></label><input class="inp" id="pName" placeholder="e.g. City Drainage Survey" /></div>
       <div class="field"><label class="lbl">Description</label><input class="inp" id="pDesc" placeholder="Optional" /></div>
+      <div class="card" style="margin-top:4px"><div class="card-lbl">Project type <span class="req">*</span></div>
+        <div class="seg" id="pMode"><button type="button" class="on" data-m="standard">Standard</button><button type="button" data-m="streaming">Streaming Capture</button></div>
+        <div id="pStreamCfg" style="display:none;margin-top:11px">
+          <div class="note" style="margin-bottom:10px">Coordinates are captured <b>automatically from live GPS</b> while you walk or drive. Auto-filled per feature: Z-value, coordinates, speed (m/s + km/h), direction (N/NE/E…), date & time. Optional: road name, road ID, community, district.</div>
+          <div class="field"><label class="lbl">Feature class name <span class="req">*</span></label><input class="inp" id="pFeatClass" placeholder="e.g. Road_Centerline" /></div>
+          <div class="field"><label class="lbl">Geometry type</label><div class="seg" id="pStreamGeom"><button type="button" class="on" data-g="point">Point</button><button type="button" data-g="line">Line</button><button type="button" data-g="polygon">Polygon</button></div></div>
+          <div class="field" id="pTolWrap"><label class="lbl">Capture a point every</label><select class="sel" id="pTol"><option value="1">1 metre</option><option value="2">2 metres</option><option value="5">5 metres</option><option value="10">10 metres</option><option value="custom">Custom…</option></select><input class="inp" id="pTolCustom" style="display:none;margin-top:8px" placeholder="Distance in metres" inputmode="decimal" /></div>
+          <div class="muted" id="pStreamHint">A new point record is saved silently each time you move that distance.</div>
+        </div>
+      </div>
       <div class="card" style="margin-top:4px"><div class="card-lbl">${icon('globe', 13, 'display:inline;vertical-align:-2px')} Coordinate system <span class="req">*</span></div>
         <div class="seg" id="crsKind" style="margin-bottom:11px"><button type="button" class="on" data-k="gcs">Geographic (GCS)</button><button type="button" data-k="utm">Projected (UTM)</button><button type="button" data-k="other">Other EPSG</button></div>
         <div id="crsGcs"><select class="sel" id="crsGcsSel"><option value="EPSG:4326|WGS 84 (GCS, lat/long)">WGS 84 (EPSG:4326) — most common</option><option value="EPSG:4269|NAD83 (GCS)">NAD83 (EPSG:4269)</option></select></div>
@@ -870,7 +881,11 @@ Object.assign(App, {
       </div>
       <div class="note">Coordinates are captured in WGS 84 and re-projected to your chosen system for display and export — so your data stays correct.</div>`;
     this.openSheet('New project', body, `<button class="btn btn-ghost flex" id="pBack">Back</button><button class="btn btn-primary flex" id="pSave">${icon('check', 17)} Create</button>`);
-    let kind = 'gcs';
+    let kind = 'gcs', pmode = 'standard', sgeom = 'point';
+    document.querySelectorAll('#pMode button').forEach((b) => b.onclick = () => { pmode = b.dataset.m; document.querySelectorAll('#pMode button').forEach((x) => x.classList.toggle('on', x === b)); document.getElementById('pStreamCfg').style.display = pmode === 'streaming' ? 'block' : 'none'; });
+    const streamHints = { point: 'A new point record is saved silently each time you move that distance.', line: 'A vertex is added every 10 m and wherever your direction changes. Tap Stop to save the line.', polygon: 'A vertex is added every 10 m and at direction changes. Returning near your start point closes the polygon automatically and begins a new one.' };
+    document.querySelectorAll('#pStreamGeom button').forEach((b) => b.onclick = () => { sgeom = b.dataset.g; document.querySelectorAll('#pStreamGeom button').forEach((x) => x.classList.toggle('on', x === b)); document.getElementById('pTolWrap').style.display = sgeom === 'point' ? 'block' : 'none'; document.getElementById('pStreamHint').textContent = streamHints[sgeom]; });
+    document.getElementById('pTol').onchange = (e) => { document.getElementById('pTolCustom').style.display = e.target.value === 'custom' ? 'block' : 'none'; };
     document.querySelectorAll('#crsKind button').forEach((b) => b.onclick = () => { kind = b.dataset.k; document.querySelectorAll('#crsKind button').forEach((x) => x.classList.toggle('on', x === b)); document.getElementById('crsGcs').style.display = kind === 'gcs' ? 'block' : 'none'; document.getElementById('crsUtm').style.display = kind === 'utm' ? 'block' : 'none'; document.getElementById('crsOther').style.display = kind === 'other' ? 'block' : 'none'; });
     document.getElementById('pBack').onclick = () => this.goBack();
     document.getElementById('pSave').onclick = async () => {
@@ -881,10 +896,23 @@ Object.assign(App, {
       else if (kind === 'utm') { const v = document.getElementById('crsUtmSel').value; const [c, n] = v.split('|'); crsCode = c; crsName = n; }
       else { const code = document.getElementById('crsOtherIn').value.trim(); if (!/^\d+$/.test(code)) { this.toast('Enter a valid EPSG number', 'err'); return; } crsCode = `EPSG:${code}`; crsName = `EPSG:${code}`; if (typeof Geo !== 'undefined') Geo.ensureDef(crsCode); }
       const proj = { id: uid('proj'), name, description: document.getElementById('pDesc').value.trim(), crsCode, crsName, surveyor: this.state.user.name, role: this.state.user.role, createdAt: nowISO() };
+      if (pmode === 'streaming') {
+        const featureClass = document.getElementById('pFeatClass').value.trim().replace(/\s+/g, '_');
+        if (!featureClass) { this.toast('Enter the feature class name', 'err'); return; }
+        let tolerance = 1;
+        if (sgeom === 'point') {
+          const sel = document.getElementById('pTol').value;
+          tolerance = sel === 'custom' ? Number(document.getElementById('pTolCustom').value) : Number(sel);
+          if (!isFinite(tolerance) || tolerance <= 0) { this.toast('Enter a valid tolerance distance in metres', 'err'); return; }
+        }
+        proj.mode = 'streaming';
+        proj.streamCfg = { featureClass, geomType: sgeom, tolerance };
+      }
       await DB.put('projects', proj);
       this.state.projects.unshift(proj);
       this.setProject(proj);
-      this.toast('Project created', 'ok');
+      if (proj.mode === 'streaming') { await this.ensureStreamLayer(); this.renderStreamBar(); this.toast('Streaming project ready — tap Start when you are in position', 'ok'); }
+      else this.toast('Project created', 'ok');
     };
   },
 
@@ -915,6 +943,16 @@ Object.assign(App, {
     this.startEditing(true);
     this.restoreImagery();
     this.closeSheet();
+    // streaming projects have a dedicated bar; stop any streaming session left over from another project
+    this._streamActive = false; this._streamPaused = false; this._streamVerts = []; this._streamCount = 0; this._streamPathLen = 0; this.clearStreamPreview();
+    if (p.mode === 'streaming') {
+      await this.ensureStreamLayer();
+      this.renderStreamBar();
+      setTimeout(() => this.updateGuidance(), 500);
+      return;
+    }
+    const sb = document.getElementById('streamBar'); if (sb) sb.style.display = 'none';
+    document.getElementById('collectBar').style.display = 'flex';
     // if no layers yet, prompt to create one
     const layers = this.state.layers.filter((l) => l.projectId === p.id);
     if (layers.length === 0) setTimeout(() => this.rootNav(this.projectStartChoice), 400);
@@ -1522,7 +1560,7 @@ Object.assign(App, {
   },
 
   hideCollectBar() { document.getElementById('collectBar').style.display = 'none'; },
-  showCollectBar() { document.getElementById('collectBar').style.display = 'flex'; },
+  showCollectBar() { if (this.isStreamingProject && this.isStreamingProject()) return; document.getElementById('collectBar').style.display = 'flex'; },
 
   /* ---------- Point placement: tap the map, it's placed immediately ---------- */
   beginPlacePoint() {
@@ -2050,7 +2088,26 @@ Object.assign(App, {
       btn.innerHTML = `${icon('package', 16)} Build ZIP (data + media + report)`;
     };
     document.getElementById('exShare').onclick = async () => { const s = recsFor(); if (!s.length) return; const gj = JSON.stringify(reproj(Exporter.toGeoJSON(s)), null, 2); const file = new File([gj], `${safe}.geojson`, { type: 'application/geo+json' }); if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: proj.name }); } catch {} } else if (navigator.share) { try { await navigator.share({ title: proj.name, text: `${s.length} records` }); } catch {} } else this.toast('Sharing not supported — use download', 'err'); };
-    document.getElementById('exMail').onclick = () => { const s = recsFor(); window.location.href = `mailto:?subject=${encodeURIComponent('Field data — ' + proj.name)}&body=${encodeURIComponent(`${s.length} record(s) from "${proj.name}". Attach the exported file.`)}`; };
+    document.getElementById('exMail').onclick = async () => {
+      const s = recsFor(); if (!s.length) { this.toast('No records to send', 'err'); return; }
+      const btn = document.getElementById('exMail'); const prev = btn.innerHTML; btn.innerHTML = `${icon('refresh', 16, 'display:inline-block')} Preparing…`; btn.disabled = true;
+      try {
+        // Build the full ZIP package and hand it to the device share sheet — choosing
+        // Gmail/Outlook there attaches the file automatically to a new email.
+        const route = this.routeGeoJSON();
+        const blob = await Exporter.buildZipPackage(s, proj, route.features.length ? route : null);
+        const file = new File([blob], `${safe}_Package.zip`, { type: 'application/zip' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: `Smart Maidani export — ${proj.name}`, text: `${s.length} record(s) from "${proj.name}". Package includes GeoJSON, KML, Shapefile, CSV, Excel and media.` });
+        } else {
+          // Desktop / unsupported browser: download the ZIP, then open a pre-filled email.
+          downloadBlob(`${safe}_Package.zip`, blob, 'application/zip');
+          this.toast('ZIP downloaded — attach it to the email that opens', 'ok');
+          setTimeout(() => { window.location.href = `mailto:?subject=${encodeURIComponent('Smart Maidani export — ' + proj.name)}&body=${encodeURIComponent(`${s.length} record(s) from "${proj.name}". The package ZIP was just downloaded — please attach it.`)}`; }, 600);
+        }
+      } catch (e) { if (e && e.name !== 'AbortError') this.toast('Could not prepare the email package', 'err'); }
+      btn.innerHTML = prev; btn.disabled = false;
+    };
   },
 
   // Reproject a WGS84 GeoJSON to the project CRS for export (coordinates become E/N)
@@ -2119,6 +2176,11 @@ Object.assign(App, {
   updateGuidance() {
     if (!this.state.user) return;
     if (!this.state.project) { this.guide('No project open', 'Create or open a project to begin.', 'Projects', () => this.rootNav(this.openProjectPicker)); return; }
+    if (this.isStreamingProject()) {
+      if (!this._streamActive) this.guide('Streaming Capture ready', 'Walk or drive to your start position, then tap Start on the bar below. Coordinates are captured automatically.', null, null);
+      else this.hideGuide();
+      return;
+    }
     const layers = this.state.layers.filter((l) => l.projectId === this.state.project.id);
     if (!layers.length) { this.guide('Project ready', 'Now add your first layer — import GIS data or create one from scratch.', 'Set up', () => this.rootNav(this.projectStartChoice)); return; }
     const recs = this.state.records.filter((r) => r.projectId === this.state.project.id);
@@ -2355,6 +2417,254 @@ Object.assign(App, {
     const first = this.state.records.find((r) => r.imported && r.projectId === this.state.project.id);
     if (first && this.state.map) { const g = Exporter.geometryOf(first); const c = g.type === 'Point' ? g.coordinates : (g.type === 'LineString' ? g.coordinates[0] : g.coordinates[0][0]); this.state.map.setView([c[1], c[0]], 15); }
     setTimeout(() => this.updateGuidance(), 600);
+  },
+});
+
+/* ============================================================
+   Part 9 — Streaming Capture (continuous GPS coordinate capture)
+   A dedicated project type: the app records features automatically
+   from the live GPS watch while the surveyor walks or drives.
+   Point  -> a new point record every <tolerance> metres (silent save)
+   Line   -> auto vertex every 10 m + at direction changes; Stop saves
+   Polygon-> auto vertex; auto-closes near the start point, then begins
+             a new polygon automatically.
+   ============================================================ */
+Object.assign(App, {
+  STREAM_ACC_LIMIT: 15,        // ignore fixes with accuracy worse than 15 m
+  STREAM_LINE_STEP: 10,        // line/polygon: vertex every 10 m
+  STREAM_TURN_DEG: 20,         // extra vertex when heading changes by more than this
+  STREAM_TURN_MIN_D: 2,        // ...but only if moved at least 2 m (kills jitter)
+  STREAM_CLOSE_D: 5,           // polygon auto-close: within 5 m of start
+  STREAM_CLOSE_MINVERT: 8,     // ...after at least 8 vertices
+  STREAM_CLOSE_MINLEN: 30,     // ...and at least 30 m walked
+
+  isStreamingProject() { return !!(this.state.project && this.state.project.mode === 'streaming'); },
+
+  compass8(deg) {
+    if (deg == null || !isFinite(deg)) return '';
+    const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+    return dirs[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
+  },
+  bearingBetween(a, b) {
+    const rad = Math.PI / 180;
+    const y = Math.sin((b.lng - a.lng) * rad) * Math.cos(b.lat * rad);
+    const x = Math.cos(a.lat * rad) * Math.sin(b.lat * rad) - Math.sin(a.lat * rad) * Math.cos(b.lat * rad) * Math.cos((b.lng - a.lng) * rad);
+    return ((Math.atan2(y, x) / rad) + 360) % 360;
+  },
+
+  // Ensure the dedicated streaming layer exists (created from streamCfg at project creation,
+  // but re-created here defensively so an imported/synced project still works).
+  async ensureStreamLayer() {
+    const p = this.state.project, cfg = p.streamCfg || {};
+    let l = this.state.layers.find((x) => x.projectId === p.id && x.stream);
+    if (l) return l;
+    l = {
+      id: uid('lyr'), projectId: p.id, stream: true,
+      name: cfg.featureClass || 'Streaming_Capture', geomType: cfg.geomType || 'point',
+      fields: [
+        { id: uid('f'), key: 'ROADNAME', label: 'RoadName', type: 'text' },
+        { id: uid('f'), key: 'ROADID', label: 'RoadID', type: 'text' },
+        { id: uid('f'), key: 'COMMUNITY', label: 'Community', type: 'text' },
+        { id: uid('f'), key: 'DISTRICT', label: 'District', type: 'text' },
+      ],
+      symbology: { color: '#0079C1', size: 8 }, createdAt: nowISO(),
+    };
+    await DB.put('layers', l);
+    this.state.layers.push(l);
+    return l;
+  },
+
+  // User-editable optional attributes stamped onto every captured feature.
+  streamAttrs() { return this._streamAttrs || (this._streamAttrs = { ROADNAME: '', ROADID: '', COMMUNITY: '', DISTRICT: '' }); },
+
+  streamAutoFields(fix) {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const heading = fix.heading != null ? fix.heading : (this._streamLastPt ? this.bearingBetween(this._streamLastPt, fix) : null);
+    const spd = fix.speed != null && isFinite(fix.speed) ? fix.speed : null;
+    return {
+      FEATURECLASS: (this.state.project.streamCfg || {}).featureClass || 'Streaming_Capture',
+      Z_VALUE: fix.z != null ? Math.round(fix.z * 100) / 100 : '',
+      SPEED_MPS: spd != null ? Math.round(spd * 100) / 100 : '',
+      SPEED_KMH: spd != null ? Math.round(spd * 3.6 * 100) / 100 : '',
+      DIRECTION: this.compass8(heading),
+      CAP_DATE: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+      CAP_TIME: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+      ...this.streamAttrs(),
+    };
+  },
+
+  /* ---------- lifecycle ---------- */
+  async startStreaming() {
+    if (!this.isStreamingProject()) return;
+    this._streamLayer = await this.ensureStreamLayer();
+    this._streamActive = true; this._streamPaused = false;
+    this._streamLastPt = null; this._streamVerts = []; this._streamVertHeading = null; this._streamPathLen = 0;
+    this._streamStartISO = nowISO(); this._streamCount = this._streamCount || 0;
+    if (!this._watchStarted) this.startWatch();
+    this.renderStreamBar();
+    const g = (this.state.project.streamCfg || {}).geomType || 'point';
+    const tol = (this.state.project.streamCfg || {}).tolerance || 1;
+    this.toast(g === 'point' ? `Streaming started — a point every ${tol} m` : g === 'line' ? 'Streaming started — walk the line, tap Stop to save' : 'Streaming started — walk the boundary, it closes automatically', 'ok');
+  },
+  pauseStreaming() { this._streamPaused = true; this.renderStreamBar(); this.toast('Streaming paused'); },
+  resumeStreaming() { this._streamPaused = false; this.renderStreamBar(); this.toast('Streaming resumed', 'ok'); },
+  async stopStreaming() {
+    const g = (this.state.project.streamCfg || {}).geomType || 'point';
+    if (g === 'line' && (this._streamVerts || []).length >= 2) await this.saveStreamPath('LineString');
+    else if (g === 'polygon' && (this._streamVerts || []).length >= 3) await this.saveStreamPath('Polygon');
+    else if (g !== 'point' && (this._streamVerts || []).length) this.toast('Not enough vertices — discarded', 'err');
+    this._streamActive = false; this._streamPaused = false; this._streamVerts = []; this.clearStreamPreview();
+    this.renderStreamBar();
+    this.toast('Streaming stopped', 'ok');
+  },
+
+  /* ---------- per-fix engine (called from onFix) ---------- */
+  async streamOnFix(fix) {
+    if (!this._streamActive || this._streamPaused || !this.isStreamingProject()) return;
+    if (fix.accuracy != null && fix.accuracy > this.STREAM_ACC_LIMIT) return; // bad sky view — skip
+    const cfg = this.state.project.streamCfg || {}, g = cfg.geomType || 'point';
+    if (g === 'point') return this.streamPointFix(fix, cfg);
+    return this.streamPathFix(fix, g);
+  },
+
+  async streamPointFix(fix, cfg) {
+    const tol = Math.max(0.5, Number(cfg.tolerance) || 1);
+    if (this._streamLastPt && this.routeDistance(this._streamLastPt, fix) < tol) return;
+    const data = this.streamAutoFields(fix);
+    this._streamLastPt = { lat: fix.lat, lng: fix.lng };
+    const coords = fix.z != null ? [fix.lng, fix.lat, Math.round(fix.z * 100) / 100] : [fix.lng, fix.lat];
+    const rec = {
+      id: uid('rec'), projectId: this.state.project.id, layerId: this._streamLayer.id, layerName: this._streamLayer.name,
+      geomType: 'point', data,
+      geometry: { type: 'Point', coordinates: coords },
+      location: { lat: fix.lat, lng: fix.lng, z: fix.z != null ? Math.round(fix.z * 100) / 100 : null, accuracy: fix.accuracy != null ? Math.round(fix.accuracy * 100) / 100 : null, capturedAt: nowISO() },
+      media: [], surveyor: this.state.user.name, role: this.state.user.role, status: 'completed', createdAt: nowISO(), updatedAt: nowISO(),
+    };
+    await DB.put('records', rec);
+    this.state.records.unshift(rec);
+    this._streamCount = (this._streamCount || 0) + 1;
+    if (rec.location.z == null && navigator.onLine) this.backfillZ(rec);
+    this.throttledStreamRender();
+  },
+
+  streamPathFix(fix, g) {
+    const verts = this._streamVerts;
+    const pt = { lat: fix.lat, lng: fix.lng, z: fix.z != null ? Math.round(fix.z * 100) / 100 : null };
+    if (!verts.length) { verts.push(pt); this._streamVertHeading = null; this.renderStreamPreview(); this.renderStreamBar(); return; }
+    const last = verts[verts.length - 1];
+    const d = this.routeDistance(last, pt);
+    const heading = this.bearingBetween(last, pt);
+    let turn = 0;
+    if (this._streamVertHeading != null) { turn = Math.abs(heading - this._streamVertHeading); if (turn > 180) turn = 360 - turn; }
+    const stepHit = d >= this.STREAM_LINE_STEP;
+    const turnHit = this._streamVertHeading != null && turn >= this.STREAM_TURN_DEG && d >= this.STREAM_TURN_MIN_D;
+    if (!stepHit && !turnHit) return;
+    verts.push(pt);
+    this._streamVertHeading = heading;
+    this._streamPathLen += d;
+    this.renderStreamPreview(); this.renderStreamBar();
+    // polygon auto-close
+    if (g === 'polygon' && verts.length >= this.STREAM_CLOSE_MINVERT && this._streamPathLen >= this.STREAM_CLOSE_MINLEN
+        && this.routeDistance(verts[0], pt) <= this.STREAM_CLOSE_D) {
+      this.saveStreamPath('Polygon').then(() => {
+        this.toast('Polygon completed — starting a new one', 'ok');
+        this._streamVerts = []; this._streamVertHeading = null; this._streamPathLen = 0; this._streamStartISO = nowISO();
+        this.clearStreamPreview(); this.renderStreamBar();
+      });
+    }
+  },
+
+  async saveStreamPath(type) {
+    const verts = this._streamVerts.slice();
+    if (type === 'Polygon' && (verts[0].lat !== verts[verts.length - 1].lat || verts[0].lng !== verts[verts.length - 1].lng)) verts.push({ ...verts[0] });
+    const toC = (v) => (v.z != null ? [v.lng, v.lat, v.z] : [v.lng, v.lat]);
+    const geometry = type === 'Polygon' ? { type: 'Polygon', coordinates: [verts.map(toC)] } : { type: 'LineString', coordinates: verts.map(toC) };
+    const now = new Date(), pad = (n) => String(n).padStart(2, '0');
+    const startD = new Date(this._streamStartISO);
+    const data = {
+      FEATURECLASS: (this.state.project.streamCfg || {}).featureClass || 'Streaming_Capture',
+      ...this.streamAttrs(),
+      START_DATE: `${startD.getFullYear()}-${pad(startD.getMonth() + 1)}-${pad(startD.getDate())}`,
+      START_TIME: `${pad(startD.getHours())}:${pad(startD.getMinutes())}:${pad(startD.getSeconds())}`,
+      END_DATE: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+      END_TIME: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+      VERTEX_CNT: verts.length,
+      LENGTH_M: Math.round(this._streamPathLen * 100) / 100,
+    };
+    const first = verts[0];
+    const rec = {
+      id: uid('rec'), projectId: this.state.project.id, layerId: this._streamLayer.id, layerName: this._streamLayer.name,
+      geomType: type === 'Polygon' ? 'polygon' : 'line', data, geometry,
+      location: { lat: first.lat, lng: first.lng, z: first.z, accuracy: null, capturedAt: this._streamStartISO },
+      media: [], surveyor: this.state.user.name, role: this.state.user.role, status: 'completed', createdAt: nowISO(), updatedAt: nowISO(),
+    };
+    await DB.put('records', rec);
+    this.state.records.unshift(rec);
+    this._streamCount = (this._streamCount || 0) + 1;
+    this.renderAllLayers(); this.refreshBarSub();
+  },
+
+  throttledStreamRender() {
+    clearTimeout(this._streamRenderT);
+    this._streamRenderT = setTimeout(() => { this.renderAllLayers(); this.refreshBarSub(); this.renderStreamBar(); }, 700);
+  },
+
+  /* ---------- live preview of the line/polygon being walked ---------- */
+  renderStreamPreview() {
+    if (!this.state.map || typeof L === 'undefined') return;
+    const pts = (this._streamVerts || []).map((v) => [v.lat, v.lng]);
+    if (this._streamPreview) { try { this.state.map.removeLayer(this._streamPreview); } catch {} this._streamPreview = null; }
+    if (pts.length < 2) return;
+    this._streamPreview = L.polyline(pts, { color: '#E14B3B', weight: 4, dashArray: '7 6', opacity: 0.9 }).addTo(this.state.map);
+  },
+  clearStreamPreview() { if (this._streamPreview && this.state.map) { try { this.state.map.removeLayer(this._streamPreview); } catch {} this._streamPreview = null; } },
+
+  /* ---------- streaming control bar ---------- */
+  renderStreamBar() {
+    const bar = document.getElementById('streamBar');
+    if (!bar) return;
+    if (!this.isStreamingProject()) { bar.style.display = 'none'; return; }
+    document.getElementById('collectBar').style.display = 'none';
+    bar.style.display = 'flex';
+    const cfg = this.state.project.streamCfg || {}, g = cfg.geomType || 'point';
+    const active = this._streamActive, paused = this._streamPaused;
+    const stat = !active ? 'Ready' : paused ? 'Paused' : 'Recording';
+    const detail = g === 'point'
+      ? `${this._streamCount || 0} point${(this._streamCount || 0) === 1 ? '' : 's'} · every ${cfg.tolerance || 1} m`
+      : `${(this._streamVerts || []).length} vertices · ${Math.round(this._streamPathLen || 0)} m · ${this._streamCount || 0} saved`;
+    bar.innerHTML = `
+      <div class="stream-info"><span class="stream-dot ${active && !paused ? 'rec' : ''}"></span><div><div class="stream-t">${stat} · ${esc(cfg.featureClass || 'Streaming')}</div><div class="stream-d">${g.toUpperCase()} · ${detail}</div></div></div>
+      <div class="stream-btns">
+        ${!active ? `<button class="btn btn-primary" id="stStart">${icon('play', 15)} Start</button>`
+          : `${paused ? `<button class="btn btn-primary" id="stResume">${icon('play', 15)} Resume</button>` : `<button class="btn btn-ghost" id="stPause">${icon('pause', 15)} Pause</button>`}
+             <button class="btn btn-danger" id="stStop">${icon('check', 15)} Stop${g !== 'point' ? ' & Save' : ''}</button>`}
+        <button class="btn btn-ghost" id="stFields">${icon('edit', 15)} Fields</button>
+      </div>`;
+    const on = (id, fn) => { const el = document.getElementById(id); if (el) el.onclick = fn; };
+    on('stStart', () => this.startStreaming());
+    on('stPause', () => this.pauseStreaming());
+    on('stResume', () => this.resumeStreaming());
+    on('stStop', () => this.stopStreaming());
+    on('stFields', () => this.openStreamFields());
+  },
+
+  openStreamFields() {
+    const a = this.streamAttrs();
+    const body = `
+      <div class="note" style="margin-bottom:12px">Optional attributes — whatever is entered here is stamped onto every captured feature. Update them when you enter a new road or area; capture continues in the background.</div>
+      <div class="field"><label class="lbl">Road name</label><input class="inp" id="sfRoad" value="${esc(a.ROADNAME)}" placeholder="e.g. Sheikh Zayed Road" /></div>
+      <div class="field"><label class="lbl">Road ID</label><input class="inp" id="sfRoadId" value="${esc(a.ROADID)}" placeholder="e.g. RD-104" /></div>
+      <div class="field"><label class="lbl">Community</label><input class="inp" id="sfComm" value="${esc(a.COMMUNITY)}" placeholder="Optional" /></div>
+      <div class="field"><label class="lbl">District</label><input class="inp" id="sfDist" value="${esc(a.DISTRICT)}" placeholder="Optional" /></div>`;
+    this.openSheet('Streaming attributes', body, `<button class="btn btn-primary btn-block" id="sfSave">${icon('check', 17)} Apply</button>`);
+    document.getElementById('sfSave').onclick = () => {
+      a.ROADNAME = document.getElementById('sfRoad').value.trim();
+      a.ROADID = document.getElementById('sfRoadId').value.trim();
+      a.COMMUNITY = document.getElementById('sfComm').value.trim();
+      a.DISTRICT = document.getElementById('sfDist').value.trim();
+      this.closeSheet(); this.toast('Attributes applied to next captures', 'ok');
+    };
   },
 });
 
