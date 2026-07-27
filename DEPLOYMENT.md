@@ -1,13 +1,29 @@
-# Deployment and icon refresh
+# EasyCapture 1.1.0 deployment
 
-1. Replace all files in the GitHub Pages repository with this package.
-2. Keep the package contents at the published site root so `index.html`,
-   `sw.js`, `manifest.webmanifest`, `js/`, `css/` and `icons/` remain together.
-3. Commit and push, then wait for GitHub Pages deployment to complete.
-4. Open the site while online and refresh once. V23 installs a new service
-   worker and application cache.
+## GitHub Pages
 
-The welcome screen and in-app header use the new icon immediately after the V23
-update. Android and iOS may retain an installed home-screen icon independently
-of the web cache. If that OS-level icon remains old, remove the installed PWA
-shortcut and install it again after the deployment.
+1. Publish the repository from the `main` branch and repository root.
+2. Keep `index.html`, `sw.js`, `manifest.webmanifest`, `js/`, `css/`, `icons/`, and `vendor/` together at the root.
+3. Wait for the GitHub Pages workflow to finish.
+4. Open the site online and refresh once so the `easycapture-v1.1.0` service worker takes control.
+5. Open **Menu → Offline readiness** and confirm that the application shell, local dependency bundle, map engine, projection engine, package engine, and storage checks pass.
+6. Test the required survey area in airplane mode before field deployment.
+
+Existing IndexedDB projects and records are retained because the application continues to use its legacy database identifier. Create a verified complete backup before every production upgrade.
+
+Mobile operating systems may retain an old installed PWA icon. If that happens, remove the installed shortcut and install EasyCapture again after the deployment.
+
+## Release validation
+
+Before merging a release into `main`, run:
+
+```text
+node --check js/version.js
+node --check js/safety.js
+node --check js/db.js
+node --check js/geo.js
+node --check js/export.js
+node --check js/app.js
+node --check sw.js
+node tests/safety.test.js
+```
