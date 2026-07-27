@@ -2230,8 +2230,10 @@ Object.assign(App, {
     const video = this.camEl('camVideo');
     if (!video.videoWidth) { this.toast('Camera still starting — try again', 'err'); return; }
     const canvas = this.camEl('camCanvas');
-    canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-    canvas.getContext('2d').drawImage(video, 0, 0);
+    const maxEdge = 2048;
+    const scale = Math.min(1, maxEdge / Math.max(video.videoWidth, video.videoHeight));
+    canvas.width = Math.round(video.videoWidth * scale); canvas.height = Math.round(video.videoHeight * scale);
+    canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
     canvas.toBlob(async (blob) => {
       if (!blob) { this.toast('Capture failed', 'err'); return; }
       await this.attachCapturedMedia('photo', blob);
@@ -2415,8 +2417,11 @@ Object.assign(App, {
   async openOfflineReadiness() {
     this.openSheet('Offline readiness', '<div class="note">Checking application files, storage and offline capabilities…</div>');
     const required = [
-      './index.html', './css/app.css?v=22', './js/icons.js?v=22', './js/db.js?v=22',
-      './js/geo.js?v=23', './js/export.js?v=23', './js/app.js?v=23',
+      './index.html', './css/app.css?v=1.1.0', './js/version.js?v=1.1.0',
+      './js/safety.js?v=1.1.0', './js/icons.js?v=1.1.0', './js/db.js?v=1.1.0',
+      './js/geo.js?v=1.1.0', './js/export.js?v=1.1.0', './js/app.js?v=1.1.0',
+      './vendor/leaflet.js', './vendor/proj4.js', './vendor/jszip.min.js',
+      './vendor/xlsx.full.min.js', './vendor/turf.min.js',
     ];
     let cached = 0;
     if ('caches' in window) {
@@ -2429,7 +2434,8 @@ Object.assign(App, {
     const checks = [
       ['Service worker', !!(navigator.serviceWorker && navigator.serviceWorker.controller), 'Reload once if activation is pending'],
       ['Application shell', cached === required.length, `${cached}/${required.length} mandatory files cached`],
-      ['Map engine', typeof L !== 'undefined', 'Leaflet must load successfully once'],
+      ['Local dependency bundle', cached >= required.length - 1, 'GIS libraries are packaged with the app'],
+      ['Map engine', typeof L !== 'undefined', 'Leaflet is available locally'],
       ['Projection engine', typeof proj4 !== 'undefined', 'Required for project CRS output'],
       ['Package engine', typeof JSZip !== 'undefined', 'Required for complete backups and ZIP exports'],
       ['Persistent storage', persisted, persisted ? 'Browser has granted protection' : 'Request protection below'],
@@ -2457,6 +2463,7 @@ Object.assign(App, {
     const snapshot = {
       format: 'easycapture-complete-backup',
       version: 1,
+      appVersion: typeof EASYCAPTURE_VERSION === 'undefined' ? 'unknown' : EASYCAPTURE_VERSION,
       createdAt: nowISO(),
       user: await DB.all('user'),
       projects: await DB.all('projects'),
@@ -2470,13 +2477,30 @@ Object.assign(App, {
       if (row.blob) zip.file(path, row.blob);
       snapshot.media.push({ id: row.id, savedAt: row.savedAt || null, path: row.blob ? path : null, type: row.blob && row.blob.type || '' });
     }
+    snapshot.counts = EasyCaptureSafety.backupCounts(snapshot);
     zip.file('backup.json', JSON.stringify(snapshot, null, 2));
-    return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+    const verified = await this.verifyCompleteBackup(blob, snapshot.counts);
+    if (!verified.ok) throw new Error(verified.message);
+    return blob;
+  },
+
+  async verifyCompleteBackup(fileOrBlob, expectedCounts) {
+    const zip = await JSZip.loadAsync(await fileOrBlob.arrayBuffer(), { checkCRC32: true });
+    const entry = zip.file('backup.json');
+    if (!entry) return { ok: false, message: 'Backup verification failed: backup.json is missing' };
+    const snapshot = JSON.parse(await entry.async('string'));
+    const counts = EasyCaptureSafety.backupCounts(snapshot);
+    for (const meta of (snapshot.media || [])) if (meta.path && !zip.file(meta.path)) return { ok: false, message: `Backup verification failed: missing attachment ${meta.id}` };
+    if (expectedCounts && Object.keys(expectedCounts).some((k) => expectedCounts[k] !== counts[k])) return { ok: false, message: 'Backup verification failed: item counts changed' };
+    return { ok: true, counts, snapshot };
   },
 
   async restoreCompleteBackup(file) {
     if (typeof JSZip === 'undefined') throw new Error('ZIP engine is unavailable');
-    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const check = await this.verifyCompleteBackup(file);
+    if (!check.ok) throw new Error(check.message);
+    const zip = await JSZip.loadAsync(await file.arrayBuffer(), { checkCRC32: true });
     const entry = zip.file('backup.json');
     if (!entry) throw new Error('backup.json is missing');
     const snapshot = JSON.parse(await entry.async('string'));
@@ -2495,8 +2519,12 @@ Object.assign(App, {
     await DB.replaceAll({ user: snapshot.user || [], projects: snapshot.projects, layers: snapshot.layers || [], records: snapshot.records, settings: snapshot.settings || [], media });
   },
 
-  openBackupRestore() {
+  async openBackupRestore() {
+    const last = await DB.get('settings', 'last_verified_backup');
+    const ageDays = last && last.createdAt ? Math.floor((Date.now() - new Date(last.createdAt).getTime()) / 86400000) : null;
+    const backupState = last ? `Last verified backup: ${fmtDate(last.createdAt)} · ${last.records || 0} records · ${last.media || 0} attachments` : 'No verified backup has been created on this device.';
     const body = `<div class="note">A complete backup includes all profiles, projects, layers, records, routes, settings, photos, videos and files stored by EasyCapture.</div>
+      <div class="backup-health ${last && ageDays <= 7 ? 'good' : 'warn'}"><b>${esc(backupState)}</b>${ageDays > 7 ? '<span>Backup is more than 7 days old.</span>' : ''}</div>
       <button class="btn btn-primary btn-block btn-lg" id="backupNow">${icon('download', 17)} Download complete backup</button>
       <input type="file" id="restoreFile" accept=".zip,application/zip" hidden />
       <button class="btn btn-ghost btn-block" id="restoreNow" style="margin-top:10px">${icon('upload', 17)} Restore complete backup</button>
@@ -2507,7 +2535,9 @@ Object.assign(App, {
       try {
         const blob = await this.buildCompleteBackup();
         downloadBlob(`EasyCapture_Complete_Backup_${new Date().toISOString().slice(0, 10)}.zip`, blob, 'application/zip');
-        status.textContent = ''; this.toast('Complete backup downloaded', 'ok');
+        const verified = await this.verifyCompleteBackup(blob);
+        await DB.put('settings', { key: 'last_verified_backup', createdAt: nowISO(), ...verified.counts });
+        status.textContent = ''; this.toast(`Verified backup downloaded · ${verified.counts.records} records`, 'ok');
       } catch (e) { status.textContent = ''; this.toast('Backup failed: ' + e.message, 'err'); }
     };
     const input = document.getElementById('restoreFile');
@@ -2519,6 +2549,26 @@ Object.assign(App, {
       try { await this.restoreCompleteBackup(f); this.toast('Backup restored — reloading', 'ok'); setTimeout(() => location.reload(), 700); }
       catch (err) { status.textContent = ''; this.toast('Restore failed: ' + err.message, 'err'); }
     };
+  },
+
+  async runProjectQA(showSheet) {
+    if (!this.state.project) throw new Error('Select a project first');
+    const records = this.state.records.filter((r) => r.projectId === this.state.project.id);
+    const layers = this.state.layers.filter((l) => l.projectId === this.state.project.id);
+    const mediaIds = new Set((await DB.all('media')).map((m) => m.id));
+    const report = EasyCaptureSafety.audit(records, layers, { domains: this.state.project.domains || {}, mediaIds, poorAccuracy: 15 });
+    if (showSheet !== false) {
+      const c = report.counts;
+      const cells = [['Total records', c.total], ['Complete', c.complete], ['Incomplete', c.incomplete], ['Invalid geometry', c.invalidGeometry], ['Missing required', c.missingRequired], ['Domain violations', c.domainViolations], ['Poor GPS accuracy', c.poorAccuracy], ['Missing media', c.missingMedia], ['Duplicate IDs', c.duplicateIds]];
+      const details = report.issues.slice(0, 100).map((r) => `<div class="qa-issue"><b>${esc(r.layer || 'Unknown layer')} · ${esc(r.recordId)}</b><span>${esc(r.issues.join(' · '))}</span></div>`).join('');
+      const body = `<div class="qa-banner ${report.passed ? 'pass' : 'fail'}"><b>${report.passed ? 'QA/QC passed' : `${report.issues.length} record(s) need attention`}</b><span>Accuracy warning threshold: ±15 m</span></div>
+        <div class="qa-grid">${cells.map(([n, v]) => `<div><span>${esc(n)}</span><b>${v}</b></div>`).join('')}</div>
+        ${details || '<div class="note">No QA/QC problems found.</div>'}
+        <button class="btn btn-ghost btn-block" id="qaDownload">Download QA report</button>`;
+      this.openSheet(`QA/QC · ${this.state.project.name}`, body);
+      document.getElementById('qaDownload').onclick = () => downloadBlob(`${this.state.project.name.replace(/\s+/g, '_')}_QAQC.json`, JSON.stringify(report, null, 2), 'application/json');
+    }
+    return report;
   },
 
   openRouteSummary() {
@@ -2554,6 +2604,7 @@ Object.assign(App, {
       <div class="tpl" id="mRoute"><div class="ic">${icon('navigation', 21)}</div><div class="tx"><div class="t">Default Field Route</div><div class="d">${this.routeDistanceText(this.routeStats().distanceM)} · ${this.routeStats().pointCount} saved GPS points${this.state.route.paused ? ' · paused' : ''}</div></div><div class="chev">${icon('chevron', 18)}</div></div>
       <div class="tpl" id="mGnss"><div class="ic">${icon('target', 21)}</div><div class="tx"><div class="t">External GNSS receiver</div><div class="d">${this._gnssActive ? 'Connected · ' + this.gnssFixLabel() : 'Pair an RTK receiver for cm accuracy'}</div></div><div class="chev">${icon('chevron', 18)}</div></div>
       <div class="tpl" id="mOffline"><div class="ic">${icon('checkCircle', 21)}</div><div class="tx"><div class="t">Offline readiness</div><div class="d">Verify cache, libraries and protected storage</div></div><div class="chev">${icon('chevron', 18)}</div></div>
+      <div class="tpl" id="mQA"><div class="ic">${icon('alert', 21)}</div><div class="tx"><div class="t">Project QA/QC</div><div class="d">Check attributes, geometry, GPS and attachments</div></div><div class="chev">${icon('chevron', 18)}</div></div>
       <div class="tpl" id="mBackup"><div class="ic">${icon('package', 21)}</div><div class="tx"><div class="t">Backup & restore</div><div class="d">Complete device backup including attachments</div></div><div class="chev">${icon('chevron', 18)}</div></div>
       ${this.state.project ? `<div class="card" style="margin-top:6px"><div class="card-lbl">${icon('globe', 12, 'display:inline;vertical-align:-2px')} Project coordinate system</div><div style="font-family:var(--mono);font-size:12.5px">${esc(this.state.project.crsName)} · ${esc(this.state.project.crsCode)}</div></div>` : ''}
       <button class="btn btn-danger btn-block" id="mWipe">${icon('trash', 16)} Erase all local data</button>
@@ -2567,6 +2618,7 @@ Object.assign(App, {
     document.getElementById('mExport').onclick = () => this.navTo(this.openExport);
     document.getElementById('mRoute').onclick = () => this.navTo(this.openRouteSummary);
     document.getElementById('mOffline').onclick = () => this.navTo(this.openOfflineReadiness);
+    document.getElementById('mQA').onclick = () => this.navTo(() => this.runProjectQA(true));
     document.getElementById('mBackup').onclick = () => this.navTo(this.openBackupRestore);
     document.getElementById('mWipe').onclick = async () => {
       if (!confirm('Erase ALL data on this device (projects, layers, records, media, profile)? This cannot be undone.')) return;
@@ -2600,9 +2652,12 @@ Object.assign(App, {
       <div class="card"><div class="card-lbl">Default Field Route · ${this.routeStats().pointCount} GPS points</div><button class="btn btn-ghost btn-block" id="exRoute">${icon('navigation', 16)} Download Route GeoJSON · ${this.routeDistanceText(this.routeStats().distanceM)} · ${this.routeDurationText(this.routeStats().durationS)}</button></div>
       <div class="card"><div class="card-lbl">Complete package</div><button class="btn btn-primary btn-block" id="exZip">${icon('package', 16)} Build ZIP (data + media + report)</button>
         <div class="muted" style="margin-top:8px">Includes GeoJSON, KML, CSV, self-contained Shapefile media bundle, clickable Excel media bundle, field route and README. Geometry carries Z.</div></div>
+      <div class="card"><div class="card-lbl">Data quality</div><button class="btn btn-ghost btn-block" id="exQA">${icon('checkCircle', 16)} Run pre-export QA/QC</button>
+        <div class="muted" style="margin-top:8px">Checks required fields, geometry, domains, duplicate IDs, GPS accuracy and missing attachments.</div></div>
       <div class="card"><div class="card-lbl">Share</div><div style="display:flex;gap:8px"><button class="btn btn-ghost flex" id="exShare">${icon('share', 16)} Device share</button>${proj.template ? `<button class="btn btn-primary btn-block" id="exOffice" style="margin-bottom:8px">${icon('stack', 16)} Office package — per-feature-class GeoJSON (${esc(proj.template.name.split('_Templates')[0])})</button><div class="muted" style="margin-bottom:10px">Columns match the geodatabase exactly, domain CODES, EPSG from the template. Avoid Shapefile for template layers — long field names would truncate.</div>` : ''}<button class="btn btn-ghost flex" id="exMail">${icon('mail', 16)} Email</button></div></div>`;
     this.openSheet(`Export · ${this.state.project.name}`, body);
     document.getElementById('exLayerSel').onchange = (e) => { this._exLayer = e.target.value; this.openExport(); };
+    document.getElementById('exQA').onclick = () => this.runProjectQA(true);
     const reproj = (gj) => this.reprojectGeoJSON(gj, proj.crsCode);
     document.querySelectorAll('[data-ex]').forEach((b) => b.onclick = async () => {
       const s = recsFor(); if (!s.length) { this.toast('No records to export', 'err'); return; }
@@ -2631,7 +2686,14 @@ Object.assign(App, {
     document.getElementById('exZip').onclick = async () => {
       const s = recsFor(), route = this.routeGeoJSON(); if (!s.length && !route.features.length) { this.toast('No records or route points', 'err'); return; }
       const btn = document.getElementById('exZip'); btn.innerHTML = `${icon('refresh', 16, 'display:inline-block')} Building…`;
-      try { const blob = await Exporter.buildZipPackage(s, proj, route.features.length ? route : null, { layers: this.state.layers.filter((l) => l.projectId === proj.id) }); downloadBlob(`${safe}_package.zip`, blob, 'application/zip'); this.toast('ZIP downloaded', 'ok'); } catch (e) { this.toast('ZIP failed: ' + e.message, 'err'); }
+      try {
+        const qaReport = await this.runProjectQA(false);
+        const blob = await Exporter.buildZipPackage(s, proj, route.features.length ? route : null, { layers: this.state.layers.filter((l) => l.projectId === proj.id), qaReport, appVersion: typeof EASYCAPTURE_VERSION === 'undefined' ? 'unknown' : EASYCAPTURE_VERSION });
+        const checkZip = await JSZip.loadAsync(await blob.arrayBuffer(), { checkCRC32: true });
+        if (!checkZip.file('data/project.json') || !checkZip.file('data/qaqc_report.json')) throw new Error('Export integrity verification failed');
+        downloadBlob(`${safe}_package.zip`, blob, 'application/zip');
+        this.toast(`Verified ZIP downloaded · QA ${qaReport.passed ? 'passed' : 'warnings included'}`, 'ok');
+      } catch (e) { this.toast('ZIP failed: ' + e.message, 'err'); }
       btn.innerHTML = `${icon('package', 16)} Build ZIP (data + media + report)`;
     };
     document.getElementById('exShare').onclick = async () => { const s = recsFor(); if (!s.length) return; const gj = JSON.stringify(reproj(Exporter.toGeoJSON(s)), null, 2); const file = new File([gj], `${safe}.geojson`, { type: 'application/geo+json' }); if (navigator.canShare && navigator.canShare({ files: [file] })) { try { await navigator.share({ files: [file], title: proj.name }); } catch {} } else if (navigator.share) { try { await navigator.share({ title: proj.name, text: `${s.length} records` }); } catch {} } else this.toast('Sharing not supported — use download', 'err'); };

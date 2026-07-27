@@ -10,8 +10,8 @@
   <link rel="apple-touch-icon" href="icons/apple-touch-icon-180.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="stylesheet" href="css/app.css?v=23" />
+  <link rel="stylesheet" href="vendor/leaflet.css" />
+  <link rel="stylesheet" href="css/app.css?v=1.1.0" />
 </head>
 <body>
   <div id="app">
@@ -181,23 +181,25 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="https://unpkg.com/shpjs@4.0.4/dist/shp.js" defer></script>
-  <script src="https://unpkg.com/@tmcw/togeojson@5.8.1/dist/togeojson.umd.js" defer></script>
-  <script src="https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js" defer></script>
-  <script src="https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js" defer></script>
-  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js" defer></script>
-  <script src="js/icons.js?v=23"></script>
-  <script src="js/db.js?v=23"></script>
-  <script src="js/geo.js?v=23"></script>
-  <script src="js/export.js?v=23"></script>
-  <script src="js/app.js?v=23"></script>
+  <script src="vendor/leaflet.js"></script>
+  <script src="vendor/proj4.js"></script>
+  <script src="vendor/jszip.min.js"></script>
+  <script src="vendor/xlsx.full.min.js"></script>
+  <script src="vendor/shp.js" defer></script>
+  <script src="vendor/togeojson.umd.js" defer></script>
+  <script src="vendor/georaster.browser.bundle.min.js" defer></script>
+  <script src="vendor/georaster-layer-for-leaflet.min.js" defer></script>
+  <script src="vendor/turf.min.js" defer></script>
+  <script src="js/version.js?v=1.1.0"></script>
+  <script src="js/safety.js?v=1.1.0"></script>
+  <script src="js/icons.js?v=1.1.0"></script>
+  <script src="js/db.js?v=1.1.0"></script>
+  <script src="js/geo.js?v=1.1.0"></script>
+  <script src="js/export.js?v=1.1.0"></script>
+  <script src="js/app.js?v=1.1.0"></script>
   <script>
     document.getElementById('logoMark').innerHTML = LOGO(30);
-    if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register('sw.js?v=23', { updateViaCache: 'none' }).catch(() => {}));
+    if ('serviceWorker' in navigator) window.addEventListener('load', () => navigator.serviceWorker.register(`sw.js?v=${EASYCAPTURE_CACHE_VERSION}`, { updateViaCache: 'none' }).catch(() => {}));
   </script>
 </body>
 </html>

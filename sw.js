@@ -1,18 +1,20 @@
 /* EasyCapture service worker — v22
    Strategy: network-first for app files (updates deploy immediately, cache is offline fallback);
    cache-first for CDN libraries and map tiles. */
-const CACHE = 'easycapture-v23';
+const CACHE = 'easycapture-v1.1.0';
 const TILE_CACHE = 'easycapture-tiles-v1';
 const TILE_LIMIT = 1500;
 const CORE = [
   './',
   './index.html',
-  './css/app.css?v=23',
-  './js/icons.js?v=23',
-  './js/db.js?v=23',
-  './js/geo.js?v=23',
-  './js/export.js?v=23',
-  './js/app.js?v=23',
+  './css/app.css?v=1.1.0',
+  './js/version.js?v=1.1.0',
+  './js/safety.js?v=1.1.0',
+  './js/icons.js?v=1.1.0',
+  './js/db.js?v=1.1.0',
+  './js/geo.js?v=1.1.0',
+  './js/export.js?v=1.1.0',
+  './js/app.js?v=1.1.0',
   './manifest.webmanifest',
   './icons/apple-touch-icon-180.png',
   './icons/icon-192.png',
@@ -21,16 +23,10 @@ const CORE = [
   './icons/icon-maskable-512.png',
 ];
 const LIBS = [
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.11.0/proj4.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js',
-  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
-  'https://unpkg.com/shpjs@4.0.4/dist/shp.js',
-  'https://unpkg.com/@tmcw/togeojson@5.8.1/dist/togeojson.umd.js',
-  'https://unpkg.com/georaster@1.6.0/dist/georaster.browser.bundle.min.js',
-  'https://unpkg.com/georaster-layer-for-leaflet@3.10.0/dist/georaster-layer-for-leaflet.min.js',
-  'https://cdn.jsdelivr.net/npm/@turf/turf@6.5.0/turf.min.js',
+  './vendor/leaflet.css', './vendor/leaflet.js', './vendor/proj4.js',
+  './vendor/jszip.min.js', './vendor/xlsx.full.min.js', './vendor/shp.js',
+  './vendor/togeojson.umd.js', './vendor/georaster.browser.bundle.min.js',
+  './vendor/georaster-layer-for-leaflet.min.js', './vendor/turf.min.js',
 ];
 
 async function trimTileCache(cache) {
@@ -44,7 +40,7 @@ self.addEventListener('install', (e) => {
     caches.open(CACHE)
       // The local application shell is mandatory. If any core asset is missing,
       // installation fails instead of claiming the app is ready for offline use.
-      .then((c) => c.addAll(CORE).then(() => Promise.allSettled(LIBS.map((u) => c.add(u)))))
+      .then((c) => c.addAll(CORE.concat(LIBS)))
       .then(() => self.skipWaiting())
   );
 });

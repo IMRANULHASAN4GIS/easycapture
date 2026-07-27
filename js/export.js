@@ -604,7 +604,8 @@ ${rows || '<p>No media in this export.</p>'}</body></html>`;
     zip.file('data/features.qml', qgisStyleXml());   // QGIS picks this up beside features.geojson
     zip.file('data/features.geojson', JSON.stringify(toGeoJSON(records), null, 2));
     zip.file('data/features.kml', toKML(records, project.name));
-    zip.file('data/project.json', JSON.stringify({ project, layers: (options && options.layers) || [], records, fieldRoute: routeGeoJSON || null, exportedAt: nowISO() }, null, 2));
+    zip.file('data/project.json', JSON.stringify({ project, layers: (options && options.layers) || [], records, fieldRoute: routeGeoJSON || null, appVersion: options && options.appVersion || null, exportedAt: nowISO() }, null, 2));
+    if (options && options.qaReport) zip.file('data/qaqc_report.json', JSON.stringify(options.qaReport, null, 2));
     if (routeGeoJSON) zip.file('data/field_route.geojson', JSON.stringify(routeGeoJSON, null, 2));
 
     // Shapefile (may legitimately fail — never let it kill the whole package)

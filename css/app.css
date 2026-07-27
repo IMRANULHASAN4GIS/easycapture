@@ -637,6 +637,15 @@ input[type="checkbox"] { accent-color: var(--esri-blue); }
 .domain-btn { text-align: left; cursor: pointer; }
 .domain-btn .ph { color: var(--grey-500); }
 .domain-picker { position: fixed; inset: 0; z-index: 260; background: rgba(15,25,35,.45); display: flex; align-items: flex-end; justify-content: center; }
+.backup-health, .qa-banner { margin: 10px 0; padding: 11px 12px; border-radius: 9px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.backup-health.good, .qa-banner.pass { background: #e3f5e7; color: #176b2a; }
+.backup-health.warn, .qa-banner.fail { background: #fff2d8; color: #805800; }
+.qa-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 7px; margin: 10px 0; }
+.qa-grid > div { border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; }
+.qa-grid span { font-size: 10px; color: var(--grey-600); }
+.qa-grid b { font-size: 18px; }
+.qa-issue { border-bottom: 1px solid var(--line); padding: 8px 2px; display: flex; flex-direction: column; font-size: 12px; }
+.qa-issue span { color: var(--grey-600); margin-top: 2px; }
 .dp-card { background: var(--white); width: 100%; max-width: 560px; border-radius: 16px 16px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); max-height: 78vh; display: flex; flex-direction: column; gap: 10px; }
 .dp-head { display: flex; align-items: center; justify-content: space-between; }
 .dp-title { font-weight: 800; font-size: 15px; }

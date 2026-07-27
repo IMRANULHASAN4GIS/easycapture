@@ -75,9 +75,13 @@ easycapture/
 └── icons/
 ```
 
-## Libraries (CDN, cached for offline)
+## Libraries (bundled for offline startup)
 
-Leaflet (maps), proj4js (coordinate systems), JSZip (packaging), SheetJS (Excel). The ArcMap-safe Shapefile writer is built into the application.
+Pinned copies of Leaflet (maps), proj4js (coordinate systems), JSZip (packaging), SheetJS (Excel), Turf and import helpers are stored in `vendor/` and cached with the application. The ArcMap-safe Shapefile writer is built into the application.
+
+## Field safety
+
+Version 1.1.0 adds verified complete backups, backup-age status, local dependency checks, storage readiness, photo size reduction, pre-export QA/QC and verified complete export packages. See `RELEASE-1.1.0.md`.
 
 ## Note on elevation accuracy
 
@@ -85,7 +89,7 @@ Auto Z-values come from online terrain (DEM) services — ground-surface elevati
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Bundled dependency acknowledgements are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ---
 
